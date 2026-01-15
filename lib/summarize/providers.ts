@@ -52,9 +52,7 @@ export async function summarizeWithGemini(prompt: string): Promise<string> {
   return summary;
 }
 
-export async function summarizeWithHuggingFace(
-  prompt: string,
-): Promise<string> {
+export async function summarizeWithHuggingFace(text: string): Promise<string> {
   const apiKey = process.env.HUGGINGFACE_API_KEY;
   if (!apiKey) {
     throw new Error(
@@ -72,7 +70,7 @@ export async function summarizeWithHuggingFace(
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      inputs: prompt,
+      inputs: text,
       parameters: { max_new_tokens: 200, temperature: 0.2 },
     }),
   });
@@ -97,6 +95,7 @@ export async function summarizeWithHuggingFace(
 
 export async function summarizeWithFallback(
   prompt: string,
+  text: string,
 ): Promise<ProviderResult> {
   try {
     const summary = await summarizeWithGemini(prompt);
@@ -105,7 +104,7 @@ export async function summarizeWithFallback(
     if (!process.env.HUGGINGFACE_API_KEY) {
       throw err;
     }
-    const summary = await summarizeWithHuggingFace(prompt);
+    const summary = await summarizeWithHuggingFace(text);
     return { summary, provider: "huggingface" };
   }
 }

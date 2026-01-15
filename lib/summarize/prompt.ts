@@ -3,7 +3,7 @@ import type { Mode } from "./types";
 export function buildPrompt(text: string, mode?: Mode) {
   const instruction =
     mode === "bullets"
-      ? "Summarize the transcript into clear bullet points. Keep it concise."
+      ? "Summarize the transcript into clear bullet points. Keep it concise. Each line must start with a bullet (e.g., '- ')."
       : mode === "actions"
       ? "Extract concrete action items. Use a checklist format."
       : "Write a concise executive summary of the transcript.";

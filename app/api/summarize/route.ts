@@ -1,11 +1,28 @@
 import { NextResponse } from "next/server";
-
-type Mode = "executive" | "bullets" | "actions";
+import { summarizeTranscript } from "@/lib/summarize/summarize";
+import type { Mode } from "@/lib/summarize/types";
+import { checkRateLimit } from "@/lib/summarize/rateLimit";
 
 export async function POST(req: Request) {
   const start = Date.now();
 
   try {
+    const ip =
+      req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+      req.headers.get("x-real-ip") ||
+      "unknown";
+    const limit = checkRateLimit(ip);
+    if (!limit.ok) {
+      const retryAfter = Math.ceil((limit.resetAt - Date.now()) / 1000);
+      return NextResponse.json(
+        { error: "Rate limit exceeded. Please try again later." },
+        {
+          status: 429,
+          headers: { "Retry-After": String(Math.max(1, retryAfter)) },
+        },
+      );
+    }
+
     const { text, mode } = (await req.json()) as { text?: string; mode?: Mode };
 
     if (!text || text.trim().length < 30) {
@@ -23,44 +40,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      return NextResponse.json(
-        {
-          error:
-            "Missing GEMINI_API_KEY. Add it to .env.local and restart the server.",
-        },
-        { status: 500 },
-      );
-    }
-
-    const prompt = buildPrompt(cleaned, mode);
-
-    const model = "gemini-2.0-flash";
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-
-    const resp = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ role: "user", parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.3, maxOutputTokens: 450 },
-      }),
-    });
-
-    const json = await resp.json();
-
-    if (!resp.ok) {
-      const msg = json?.error?.message || "Gemini API error.";
-      return NextResponse.json({ error: msg }, { status: 500 });
-    }
-
-    const summary =
-      json?.candidates?.[0]?.content?.parts
-        ?.map((p: any) => p?.text)
-        .join("")
-        ?.trim() || "No output returned.";
-
+    const { summary, provider } = await summarizeTranscript(cleaned, mode);
     const latency = Date.now() - start;
 
     return NextResponse.json({
@@ -68,27 +48,10 @@ export async function POST(req: Request) {
       tokens_in: Math.ceil(cleaned.length / 4),
       tokens_out: Math.ceil(summary.length / 4),
       latency_ms: latency,
+      provider,
     });
-  } catch {
-    return NextResponse.json({ error: "Server error." }, { status: 500 });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Server error.";
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
-}
-
-function buildPrompt(text: string, mode?: Mode) {
-  const instruction =
-    mode === "bullets"
-      ? "Summarize the transcript into clear bullet points. Keep it concise."
-      : mode === "actions"
-      ? "Extract concrete action items. Use a checklist format."
-      : "Write a concise executive summary of the transcript.";
-
-  return `${instruction}
-
-Rules:
-- Be accurate; do not invent details.
-- Keep output under ~12 lines unless necessary.
-- Use clear formatting.
-
-Transcript:
-${text}`;
 }

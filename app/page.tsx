@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type Mode = "executive" | "bullets" | "actions";
 
@@ -15,11 +15,15 @@ export default function Home() {
   const [summary, setSummary] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>("");
-const [meta, setMeta] = useState<{
-  latency_ms?: number;
-  tokens_in?: number;
-  tokens_out?: number;
-}>({});
+  const [meta, setMeta] = useState<{
+    latency_ms?: number;
+    tokens_in?: number;
+    tokens_out?: number;
+  }>({});
+  const cacheRef = useRef<Map<string, { summary: string; meta: any }>>(
+    new Map(),
+  );
+  const initialRender = useRef(true);
 
   const charCount = text.length;
 
@@ -36,17 +40,39 @@ const [meta, setMeta] = useState<{
     }
   }, [mode]);
 
-  async function onGenerate() {
+  const cacheKey = useMemo(() => {
+    return `${mode}::${text.trim()}`;
+  }, [mode, text]);
+
+  const onGenerate = useCallback(async () => {
     setError("");
     setSummary("");
     setLoading(true);
 
     try {
+      const cached = cacheRef.current.get(cacheKey);
+      if (cached) {
+        setMeta(cached.meta || {});
+        setSummary(cached.summary || "");
+        return;
+      }
+
       const res = await fetch("/api/summarize", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mode, text }),
       });
+
+      if (!res.ok) {
+        const contentType = res.headers.get("content-type");
+        if (contentType?.includes("application/json")) {
+          const data = await res.json();
+          throw new Error(data?.error || "Something went wrong.");
+        } else {
+          const text = await res.text();
+          throw new Error(`Server error: ${text || res.statusText}`);
+        }
+      }
 
       const data = await res.json();
 
@@ -56,17 +82,32 @@ const [meta, setMeta] = useState<{
         tokens_out: data.tokens_out,
       });
 
-      if (!res.ok) {
-        throw new Error(data?.error || "Something went wrong.");
-      }
-
       setSummary(data.summary || "");
+      cacheRef.current.set(cacheKey, {
+        summary: data.summary || "",
+        meta: {
+          latency_ms: data.latency_ms,
+          tokens_in: data.tokens_in,
+          tokens_out: data.tokens_out,
+        },
+      });
     } catch (e: any) {
       setError(e?.message || "Request failed.");
     } finally {
       setLoading(false);
     }
-  }
+  }, [cacheKey, mode, text]);
+
+  useEffect(() => {
+    if (initialRender.current) {
+      initialRender.current = false;
+      return;
+    }
+
+    if (text.trim().length >= 30) {
+      void onGenerate();
+    }
+  }, [mode, text, onGenerate]);
 
   return (
     <main className='min-h-screen bg-gray-50'>
@@ -182,7 +223,7 @@ const [meta, setMeta] = useState<{
         </div>
 
         <footer className='mt-6 text-xs text-gray-500'>
-          Next step: wire up <code>/api/summarize</code> with Gemini/OpenAI.
+          Powered by Gemini 2.0 Flash via <code>/api/summarize</code>.
         </footer>
       </div>
     </main>
